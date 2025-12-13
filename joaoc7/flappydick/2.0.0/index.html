@@ -1,0 +1,427 @@
+<!DOCTYPE html>
+<html lang="pt-br">
+<head>
+    <meta charset="utf-8" />
+    <meta name="apple-mobile-web-app-capable" content="yes" />
+    <meta name="apple-touch-fullscreen" content="yes" />
+    <meta name="apple-mobile-web-app-status-bar-style" content="black">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no, viewport-fit=cover" />
+    <title>FlappyDick</title>
+    <style>
+        body, html {
+            margin: 0;
+            padding: 0;
+            background-color: #000;
+            width: 100%;
+            height: 100%;
+            overflow: hidden;
+            touch-action: none;
+            font-family: Arial, sans-serif;
+        }
+        canvas {
+            display: block;
+            margin: 0 auto;
+        }
+    </style>
+    <!-- Usando Phaser 3.80.1 -->
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/phaser/3.80.1/phaser.min.js"></script>
+</head>
+<body>
+
+<div id="game"></div>
+
+<script>
+// --- CONFIGURAÇÕES DO JOGO ---
+const CONFIG = {
+    width: 320,
+    height: 505,
+    gravity: 1150, // Voltando para a gravidade original (mais pesada)
+    flyVelocity: -350,
+    pipeSpeed: 200, // Velocidade original
+    pipeGap: 100,
+    pipeSpawnRate: 1500 // Ajustado para dar espaço entre canos
+};
+
+// Define as camadas (z-index) para garantir que o chão nunca suma
+const DEPTH = {
+    BG: 0,
+    PIPES: 1,
+    GROUND: 2,
+    BIRD: 3,
+    UI: 100
+};
+
+function createSafeSound(scene, key) {
+    if (scene.cache.audio.exists(key)) {
+        return scene.sound.add(key);
+    }
+    return { play: () => {}, stop: () => {} };
+}
+
+class BootScene extends Phaser.Scene {
+    constructor() { super('Boot'); }
+    create() { this.scene.start('Preload'); }
+}
+
+class PreloadScene extends Phaser.Scene {
+    constructor() { super('Preload'); }
+
+    preload() {
+        this.load.crossOrigin = 'anonymous';
+
+        const width = this.cameras.main.width;
+        const height = this.cameras.main.height;
+
+        // Loading UI
+        const progressBar = this.add.graphics();
+        const progressBox = this.add.graphics();
+        progressBox.fillStyle(0x222222, 0.8);
+        progressBox.fillRoundedRect(width / 2 - 100, height / 2 - 15, 200, 30, 5);
+
+        const loadingText = this.make.text({
+            x: width / 2, y: height / 2 - 50, text: 'CARREGANDO...', 
+            style: { font: 'bold 16px Arial', fill: '#ffffff' }
+        }).setOrigin(0.5);
+
+        const percentText = this.make.text({
+            x: width / 2, y: height / 2, text: '0%', 
+            style: { font: '14px Arial', fill: '#ffffff' }
+        }).setOrigin(0.5);
+
+        const creditText = this.make.text({
+            x: width / 2, y: height / 2 + 60, text: 'Feito por JoaoC7', 
+            style: { font: '14px Arial', fill: '#4facff', fontStyle: 'italic' }
+        }).setOrigin(0.5).setInteractive({ useHandCursor: true });
+        
+        creditText.on('pointerdown', () => window.open('https://github.com/JoaoC7', '_blank'));
+
+        this.load.on('progress', function (value) {
+            percentText.setText(parseInt(value * 100) + '%');
+            progressBar.clear();
+            progressBar.fillStyle(0x4facff, 1); 
+            if (value > 0) progressBar.fillRoundedRect(width / 2 - 95, height / 2 - 10, 190 * value, 20, 3);
+        });
+
+        this.load.on('complete', function () {
+            if (progressBar.scene) {
+                progressBar.destroy();
+                progressBox.destroy();
+                loadingText.destroy();
+                percentText.destroy();
+                creditText.destroy();
+            }
+        });
+
+        // Assets
+        const baseUrl = 'https://apps.cubie.com.br/joaoc7/flappydick/2.0.0/';
+        this.load.image('background', baseUrl + 'background.png');
+        this.load.image('ground', baseUrl + 'ground.png');
+        this.load.image('title', baseUrl + 'title.png');
+        this.load.image('btn', baseUrl + 'start-button.png');
+        this.load.spritesheet('bird', baseUrl + 'bird.png', { frameWidth: 34, frameHeight: 24 });
+        this.load.spritesheet('pipe', baseUrl + 'pipes.png', { frameWidth: 54, frameHeight: 320 });
+        this.load.bitmapFont('flappy_font', baseUrl + 'fonts/flappyfont/flappyfont.png', baseUrl + 'fonts/flappyfont/flappyfont.fnt');
+        this.load.audio('fly_sound', baseUrl + 'flap.wav');
+        this.load.audio('score_sound', baseUrl + 'score.wav');
+        this.load.audio('hit_pipe_sound', baseUrl + 'pipe-hit.wav');
+        this.load.audio('hit_ground_sound', baseUrl + 'ouch.wav');
+        this.load.image('ready_text', baseUrl + 'get-ready.png');
+        this.load.image('play_tip', baseUrl + 'instructions.png');
+        this.load.image('game_over', baseUrl + 'gameover.png');
+        this.load.image('score_board', baseUrl + 'scoreboard.png');
+    }
+
+    create() {
+        if (!this.anims.exists('fly')) {
+            if (this.textures.exists('bird')) {
+                this.anims.create({
+                    key: 'fly',
+                    frames: this.anims.generateFrameNumbers('bird', { start: 0, end: 2 }),
+                    frameRate: 12,
+                    repeat: -1
+                });
+            } else {
+                const graphics = this.make.graphics().fillStyle(0xff0000).fillRect(0,0,34,24);
+                graphics.generateTexture('bird', 34, 24);
+                graphics.destroy();
+            }
+        }
+        this.scene.start('Menu');
+    }
+}
+
+class MenuScene extends Phaser.Scene {
+    constructor() { super('Menu'); }
+
+    create() {
+        const { width, height } = this.scale;
+        this.bg = this.add.tileSprite(0, 0, width, height, 'background').setOrigin(0).setDepth(DEPTH.BG);
+        this.ground = this.add.tileSprite(0, height - 112, width, 112, 'ground').setOrigin(0).setDepth(DEPTH.GROUND);
+
+        this.titleGroup = this.add.container(35, 100).setDepth(DEPTH.UI);
+        const titleSprite = this.add.image(0, 0, 'title').setOrigin(0);
+        const bird = this.add.sprite(190, 10, 'bird').setOrigin(0);
+        if (this.anims.exists('fly')) bird.play('fly');
+        this.titleGroup.add([titleSprite, bird]);
+
+        this.tweens.add({ targets: this.titleGroup, y: 120, duration: 1000, yoyo: true, repeat: -1, ease: 'Sine.easeInOut' });
+
+        const btn = this.add.image(width / 2, height / 2, 'btn').setInteractive({ cursor: 'pointer' }).setDepth(DEPTH.UI);
+        btn.on('pointerdown', () => this.startGame());
+        this.input.keyboard.on('keydown', () => this.startGame());
+    }
+
+    update() {
+        this.bg.tilePositionX += 0.5;
+        this.ground.tilePositionX += 2;
+    }
+
+    startGame() {
+        this.scene.start('Play');
+    }
+}
+
+class PlayScene extends Phaser.Scene {
+    constructor() { super('Play'); }
+
+    create() {
+        const { width, height } = this.scale;
+        
+        this.hasStarted = false;
+        this.isGameOver = false;
+        this.score = 0;
+        this.lastFlyTime = 0;
+        this.bestScore = localStorage.getItem('flappy_best_score') || 0;
+
+        // Fundo (Depth 0)
+        this.bg = this.add.tileSprite(0, 0, width, height, 'background').setOrigin(0).setDepth(DEPTH.BG);
+        
+        // Grupo de Canos
+        this.pipes = this.physics.add.group();
+        // Os canos serão criados com Depth 1 na função generatePipes
+        
+        // Chão (Depth 2 - Garante que fica na frente dos canos)
+        this.ground = this.add.tileSprite(0, height - 112, width, 112, 'ground').setOrigin(0).setDepth(DEPTH.GROUND);
+        this.physics.add.existing(this.ground, true);
+        this.ground.body.updateFromGameObject();
+
+        // Pássaro (Depth 3 - Fica na frente de tudo no cenário)
+        this.bird = this.physics.add.sprite(50, 150, 'bird').setOrigin(0.5).setDepth(DEPTH.BIRD);
+        if (this.anims.exists('fly')) this.bird.play('fly');
+        this.bird.setGravityY(0);
+        this.bird.setCollideWorldBounds(true);
+
+        // UI (Depth 100)
+        this.readyText = this.add.image(width / 2, 40, 'ready_text').setOrigin(0.5, 0).setDepth(DEPTH.UI);
+        this.playTip = this.add.image(width / 2, 300, 'play_tip').setOrigin(0.5, 0).setDepth(DEPTH.UI);
+
+        // Score
+        if (this.cache.bitmapFont.exists('flappy_font')) {
+            this.scoreText = this.add.bitmapText(width / 2 - 10, 30, 'flappy_font', '0', 36);
+        } else {
+            this.scoreText = this.add.text(width / 2 - 10, 30, '0', { font: 'bold 36px Arial', fill: '#FFF' });
+        }
+        this.scoreText.setDepth(DEPTH.UI); 
+
+        // Sons
+        this.soundFly = createSafeSound(this, 'fly_sound');
+        this.soundScore = createSafeSound(this, 'score_sound');
+        this.soundHitPipe = createSafeSound(this, 'hit_pipe_sound');
+        this.soundHitGround = createSafeSound(this, 'hit_ground_sound');
+
+        // Inputs
+        this.inputBlocked = true;
+        this.time.delayedCall(100, () => {
+            this.inputBlocked = false;
+            this.input.on('pointerdown', this.handleInput, this);
+            this.input.keyboard.on('keydown', this.handleInput, this);
+        });
+
+        // Colisões
+        this.physics.add.collider(this.bird, this.ground, this.hitGround, null, this);
+        this.physics.add.overlap(this.bird, this.pipes, this.hitPipe, null, this);
+
+        // Timer
+        this.pipeTimer = this.time.addEvent({
+            delay: CONFIG.pipeSpawnRate,
+            callback: this.generatePipes,
+            callbackScope: this,
+            loop: true,
+            paused: true
+        });
+    }
+
+    update(time, delta) {
+        if (!this.hasStarted || this.isGameOver) return;
+
+        this.bg.tilePositionX += CONFIG.pipeSpeed * (delta / 1000) * 0.1;
+        this.ground.tilePositionX += CONFIG.pipeSpeed * (delta / 1000);
+
+        if (this.bird.angle < 90) this.bird.angle += 2.5;
+
+        if (this.bird.y < 15) {
+            this.bird.y = 15;
+            this.bird.setVelocityY(0);
+        }
+
+        const children = [...this.pipes.getChildren()];
+        children.forEach((pipe) => {
+            if (pipe.x < -pipe.width) {
+                pipe.destroy();
+                return;
+            } 
+            
+            if (pipe.isScorable && !pipe.hasScored) {
+                if (pipe.x < this.bird.x) {
+                    pipe.hasScored = true;
+                    this.score++;
+                    this.scoreText.setText(this.score);
+                    this.soundScore.play();
+                }
+            }
+        });
+    }
+
+    handleInput() {
+        if (this.inputBlocked || this.isGameOver) return;
+        
+        if (!this.hasStarted) {
+            this.startGame();
+        }
+        this.fly();
+    }
+
+    startGame() {
+        this.hasStarted = true;
+        this.readyText.destroy();
+        this.playTip.destroy();
+        this.bird.setGravityY(CONFIG.gravity);
+        this.pipeTimer.paused = false;
+        this.fly();
+    }
+
+    fly() {
+        if (this.time.now - this.lastFlyTime < 100) return;
+        
+        this.bird.setVelocityY(CONFIG.flyVelocity);
+        if (this.bird.body.velocity.y < -400) this.bird.setVelocityY(-400);
+
+        this.tweens.add({ targets: this.bird, angle: -30, duration: 100 });
+        this.soundFly.play();
+        this.lastFlyTime = this.time.now;
+    }
+
+    generatePipes() {
+        if (this.isGameOver) return;
+
+        const gap = CONFIG.pipeGap;
+        const groundY = CONFIG.height - 112;
+        const minPipeY = 50;
+        const maxPos = groundY - gap - 50; 
+        const pipeY = Phaser.Math.Between(minPipeY + 50, maxPos);
+
+        // Cano Cima (Depth 1)
+        const topPipe = this.pipes.create(CONFIG.width, pipeY - gap/2, 'pipe', 0);
+        topPipe.setOrigin(0.5, 1);
+        topPipe.body.allowGravity = false;
+        topPipe.body.velocity.x = -CONFIG.pipeSpeed;
+        topPipe.setDepth(DEPTH.PIPES); // Fixando profundidade
+        
+        topPipe.isScorable = true; 
+        topPipe.hasScored = false;
+
+        // Cano Baixo (Depth 1)
+        const botPipe = this.pipes.create(CONFIG.width, pipeY + gap/2, 'pipe', 1);
+        botPipe.setOrigin(0.5, 0);
+        botPipe.body.allowGravity = false;
+        botPipe.body.velocity.x = -CONFIG.pipeSpeed;
+        botPipe.setDepth(DEPTH.PIPES); // Fixando profundidade
+        
+        botPipe.isScorable = false;
+    }
+
+    hitPipe() {
+        if (this.isGameOver) return;
+        this.soundHitPipe.play();
+        this.gameOver();
+    }
+
+    hitGround() {
+        if (this.isGameOver) return;
+        this.soundHitGround.play();
+        this.gameOver();
+    }
+
+    gameOver() {
+        this.isGameOver = true;
+        
+        this.pipeTimer.paused = true;
+        this.pipes.setVelocityX(0);
+        this.bird.anims.stop();
+        this.cameras.main.shake(20, 0.01);
+        
+        this.input.off('pointerdown', this.handleInput, this);
+        this.input.keyboard.off('keydown', this.handleInput, this);
+
+        if (this.score > this.bestScore) {
+            this.bestScore = this.score;
+            localStorage.setItem('flappy_best_score', this.bestScore);
+        }
+
+        this.showGameOverScreen();
+    }
+
+    showGameOverScreen() {
+        this.scoreText.destroy();
+
+        const { width, height } = this.scale;
+        const container = this.add.container(0, 30).setDepth(DEPTH.UI);
+
+        const goText = this.add.image(width / 2, 0, 'game_over').setOrigin(0.5, 0);
+        const board = this.add.image(width / 2, 70, 'score_board').setOrigin(0.5, 0);
+        
+        let fontStyle = { font: '20px Arial', fill: '#FFF' };
+        let currentText, bestText;
+
+        if (this.cache.bitmapFont.exists('flappy_font')) {
+            currentText = this.add.bitmapText(width / 2 + 60, 105, 'flappy_font', this.score.toString(), 20);
+            bestText = this.add.bitmapText(width / 2 + 60, 153, 'flappy_font', this.bestScore.toString(), 20);
+        } else {
+            currentText = this.add.text(width / 2 + 60, 105, this.score.toString(), fontStyle);
+            bestText = this.add.text(width / 2 + 60, 153, this.bestScore.toString(), fontStyle);
+        }
+        currentText.setOrigin(1, 0);
+        bestText.setOrigin(1, 0);
+
+        const replayBtn = this.add.image(width / 2, 210, 'btn')
+            .setInteractive({ cursor: 'pointer' });
+            
+        replayBtn.on('pointerdown', () => {
+            this.scene.restart();
+        });
+
+        container.add([goText, board, currentText, bestText, replayBtn]);
+    }
+}
+
+const gameConfig = {
+    type: Phaser.AUTO,
+    scale: {
+        mode: Phaser.Scale.FIT,
+        autoCenter: Phaser.Scale.CENTER_BOTH,
+        width: CONFIG.width,
+        height: CONFIG.height
+    },
+    parent: 'game',
+    physics: {
+        default: 'arcade',
+        arcade: { gravity: { y: 0 }, debug: false }
+    },
+    scene: [BootScene, PreloadScene, MenuScene, PlayScene],
+    pixelArt: false
+};
+
+const game = new Phaser.Game(gameConfig);
+</script>
+</body>
+</html>
