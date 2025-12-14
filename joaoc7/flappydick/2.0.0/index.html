@@ -2,28 +2,32 @@
 <html lang="pt-br">
 <head>
     <meta charset="utf-8" />
-    <meta name="apple-mobile-web-app-capable" content="yes" />
-    <meta name="apple-touch-fullscreen" content="yes" />
-    <meta name="apple-mobile-web-app-status-bar-style" content="black">
     <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no, viewport-fit=cover" />
-    <title>FlappyDick</title>
+    <meta name="apple-mobile-web-app-capable" content="yes" />
+    <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent" />
+    <meta name="apple-touch-fullscreen" content="yes" />
+    <meta name="description" content="FlappyDick 2.0.0 by JoaoC7">
+    <title>FlappyDick 2.0.0 - JoaoC7</title>
+    <link rel="apple-touch-icon" href="https://cubie.com.br/cdn/br.com.cubie.joaoc7.flappydick/assets/icon-192.png">
     <style>
         body, html {
             margin: 0;
             padding: 0;
-            background-color: #000;
             width: 100%;
             height: 100%;
             overflow: hidden;
             touch-action: none;
             font-family: Arial, sans-serif;
+            -webkit-user-select: none;
+            user-select: none;
+            overscroll-behavior: none;
         }
         canvas {
             display: block;
             margin: 0 auto;
+            outline: none;
         }
     </style>
-    <!-- Usando Phaser 3.80.1 -->
     <script src="https://cdnjs.cloudflare.com/ajax/libs/phaser/3.80.1/phaser.min.js"></script>
 </head>
 <body>
@@ -31,18 +35,19 @@
 <div id="game"></div>
 
 <script>
-// --- CONFIGURAÇÕES DO JOGO ---
+const GAME_VERSION = '2.0.0';
+
 const CONFIG = {
     width: 320,
     height: 505,
-    gravity: 1150, // Voltando para a gravidade original (mais pesada)
+    gravity: 1150,
     flyVelocity: -350,
-    pipeSpeed: 200, // Velocidade original
+    pipeSpeed: 200,
     pipeGap: 100,
-    pipeSpawnRate: 1500 // Ajustado para dar espaço entre canos
+    pipeSpawnRate: 1500,
+    flyCooldown: 150
 };
 
-// Define as camadas (z-index) para garantir que o chão nunca suma
 const DEPTH = {
     BG: 0,
     PIPES: 1,
@@ -72,7 +77,6 @@ class PreloadScene extends Phaser.Scene {
         const width = this.cameras.main.width;
         const height = this.cameras.main.height;
 
-        // Loading UI
         const progressBar = this.add.graphics();
         const progressBox = this.add.graphics();
         progressBox.fillStyle(0x222222, 0.8);
@@ -112,7 +116,6 @@ class PreloadScene extends Phaser.Scene {
             }
         });
 
-        // Assets
         const baseUrl = 'https://apps.cubie.com.br/joaoc7/flappydick/2.0.0/';
         this.load.image('background', baseUrl + 'background.png');
         this.load.image('ground', baseUrl + 'ground.png');
@@ -155,12 +158,16 @@ class MenuScene extends Phaser.Scene {
 
     create() {
         const { width, height } = this.scale;
+        
         this.bg = this.add.tileSprite(0, 0, width, height, 'background').setOrigin(0).setDepth(DEPTH.BG);
         this.ground = this.add.tileSprite(0, height - 112, width, 112, 'ground').setOrigin(0).setDepth(DEPTH.GROUND);
 
-        this.titleGroup = this.add.container(35, 100).setDepth(DEPTH.UI);
-        const titleSprite = this.add.image(0, 0, 'title').setOrigin(0);
-        const bird = this.add.sprite(190, 10, 'bird').setOrigin(0);
+        this.titleGroup = this.add.container(width / 2, 100).setDepth(DEPTH.UI).setScale(0.85);
+        
+        const titleSprite = this.add.image(0, 0, 'title').setOrigin(0.5);
+        
+        const bird = this.add.sprite(90, -10, 'bird').setOrigin(0.5);
+        
         if (this.anims.exists('fly')) bird.play('fly');
         this.titleGroup.add([titleSprite, bird]);
 
@@ -169,6 +176,16 @@ class MenuScene extends Phaser.Scene {
         const btn = this.add.image(width / 2, height / 2, 'btn').setInteractive({ cursor: 'pointer' }).setDepth(DEPTH.UI);
         btn.on('pointerdown', () => this.startGame());
         this.input.keyboard.on('keydown', () => this.startGame());
+
+        const creditText = this.add.text(width / 2, height - 30, 'Feito por JoaoC7', { 
+            font: '11px Arial', fill: '#ffffff', stroke: '#000000', strokeThickness: 2 
+        }).setOrigin(0.5).setDepth(DEPTH.UI).setInteractive({ useHandCursor: true });
+        
+        creditText.on('pointerdown', () => window.open('https://github.com/JoaoC7', '_blank'));
+
+        const versionText = this.add.text(width / 2, height - 12, 'v' + GAME_VERSION, { 
+            font: '9px Arial', fill: '#cccccc', stroke: '#000000', strokeThickness: 2 
+        }).setOrigin(0.5).setDepth(DEPTH.UI);
     }
 
     update() {
@@ -193,55 +210,59 @@ class PlayScene extends Phaser.Scene {
         this.lastFlyTime = 0;
         this.bestScore = localStorage.getItem('flappy_best_score') || 0;
 
-        // Fundo (Depth 0)
         this.bg = this.add.tileSprite(0, 0, width, height, 'background').setOrigin(0).setDepth(DEPTH.BG);
         
-        // Grupo de Canos
         this.pipes = this.physics.add.group();
-        // Os canos serão criados com Depth 1 na função generatePipes
         
-        // Chão (Depth 2 - Garante que fica na frente dos canos)
         this.ground = this.add.tileSprite(0, height - 112, width, 112, 'ground').setOrigin(0).setDepth(DEPTH.GROUND);
         this.physics.add.existing(this.ground, true);
         this.ground.body.updateFromGameObject();
 
-        // Pássaro (Depth 3 - Fica na frente de tudo no cenário)
         this.bird = this.physics.add.sprite(50, 150, 'bird').setOrigin(0.5).setDepth(DEPTH.BIRD);
         if (this.anims.exists('fly')) this.bird.play('fly');
         this.bird.setGravityY(0);
         this.bird.setCollideWorldBounds(true);
 
-        // UI (Depth 100)
         this.readyText = this.add.image(width / 2, 40, 'ready_text').setOrigin(0.5, 0).setDepth(DEPTH.UI);
         this.playTip = this.add.image(width / 2, 300, 'play_tip').setOrigin(0.5, 0).setDepth(DEPTH.UI);
 
-        // Score
         if (this.cache.bitmapFont.exists('flappy_font')) {
             this.scoreText = this.add.bitmapText(width / 2 - 10, 30, 'flappy_font', '0', 36);
         } else {
             this.scoreText = this.add.text(width / 2 - 10, 30, '0', { font: 'bold 36px Arial', fill: '#FFF' });
         }
         this.scoreText.setDepth(DEPTH.UI); 
+        this.scoreText.setVisible(false); 
 
-        // Sons
+        this.creditText = this.add.text(width / 2, height - 30, 'Feito por JoaoC7', { 
+            font: '11px Arial', fill: '#ffffff', stroke: '#000000', strokeThickness: 2 
+        }).setOrigin(0.5).setDepth(DEPTH.UI).setInteractive({ useHandCursor: true });
+        
+        this.creditText.on('pointerdown', () => window.open('https://github.com/JoaoC7', '_blank'));
+
+        this.versionText = this.add.text(width / 2, height - 12, 'v' + GAME_VERSION, { 
+            font: '9px Arial', fill: '#cccccc', stroke: '#000000', strokeThickness: 2 
+        }).setOrigin(0.5).setDepth(DEPTH.UI);
+
         this.soundFly = createSafeSound(this, 'fly_sound');
         this.soundScore = createSafeSound(this, 'score_sound');
         this.soundHitPipe = createSafeSound(this, 'hit_pipe_sound');
         this.soundHitGround = createSafeSound(this, 'hit_ground_sound');
 
-        // Inputs
         this.inputBlocked = true;
         this.time.delayedCall(100, () => {
             this.inputBlocked = false;
-            this.input.on('pointerdown', this.handleInput, this);
-            this.input.keyboard.on('keydown', this.handleInput, this);
+            this.input.on('pointerdown', () => this.handleInput());
+            this.input.keyboard.on('keydown', (event) => {
+                if (!event.repeat) {
+                    this.handleInput();
+                }
+            });
         });
 
-        // Colisões
         this.physics.add.collider(this.bird, this.ground, this.hitGround, null, this);
         this.physics.add.overlap(this.bird, this.pipes, this.hitPipe, null, this);
 
-        // Timer
         this.pipeTimer = this.time.addEvent({
             delay: CONFIG.pipeSpawnRate,
             callback: this.generatePipes,
@@ -285,30 +306,37 @@ class PlayScene extends Phaser.Scene {
     handleInput() {
         if (this.inputBlocked || this.isGameOver) return;
         
+        const now = this.time.now;
+        
+        if (now - this.lastFlyTime < CONFIG.flyCooldown) return;
+
         if (!this.hasStarted) {
             this.startGame();
         }
-        this.fly();
+        this.fly(now);
     }
 
     startGame() {
         this.hasStarted = true;
+        
         this.readyText.destroy();
         this.playTip.destroy();
+        if (this.creditText) this.creditText.destroy();
+        if (this.versionText) this.versionText.destroy();
+
+        this.scoreText.setVisible(true); 
         this.bird.setGravityY(CONFIG.gravity);
         this.pipeTimer.paused = false;
-        this.fly();
+        this.fly(this.time.now);
     }
 
-    fly() {
-        if (this.time.now - this.lastFlyTime < 100) return;
-        
+    fly(now) {
         this.bird.setVelocityY(CONFIG.flyVelocity);
         if (this.bird.body.velocity.y < -400) this.bird.setVelocityY(-400);
 
         this.tweens.add({ targets: this.bird, angle: -30, duration: 100 });
         this.soundFly.play();
-        this.lastFlyTime = this.time.now;
+        this.lastFlyTime = now;
     }
 
     generatePipes() {
@@ -320,22 +348,20 @@ class PlayScene extends Phaser.Scene {
         const maxPos = groundY - gap - 50; 
         const pipeY = Phaser.Math.Between(minPipeY + 50, maxPos);
 
-        // Cano Cima (Depth 1)
         const topPipe = this.pipes.create(CONFIG.width, pipeY - gap/2, 'pipe', 0);
         topPipe.setOrigin(0.5, 1);
         topPipe.body.allowGravity = false;
         topPipe.body.velocity.x = -CONFIG.pipeSpeed;
-        topPipe.setDepth(DEPTH.PIPES); // Fixando profundidade
+        topPipe.setDepth(DEPTH.PIPES);
         
         topPipe.isScorable = true; 
         topPipe.hasScored = false;
 
-        // Cano Baixo (Depth 1)
         const botPipe = this.pipes.create(CONFIG.width, pipeY + gap/2, 'pipe', 1);
         botPipe.setOrigin(0.5, 0);
         botPipe.body.allowGravity = false;
         botPipe.body.velocity.x = -CONFIG.pipeSpeed;
-        botPipe.setDepth(DEPTH.PIPES); // Fixando profundidade
+        botPipe.setDepth(DEPTH.PIPES);
         
         botPipe.isScorable = false;
     }
@@ -360,8 +386,8 @@ class PlayScene extends Phaser.Scene {
         this.bird.anims.stop();
         this.cameras.main.shake(20, 0.01);
         
-        this.input.off('pointerdown', this.handleInput, this);
-        this.input.keyboard.off('keydown', this.handleInput, this);
+        this.input.off('pointerdown');
+        this.input.keyboard.off('keydown');
 
         if (this.score > this.bestScore) {
             this.bestScore = this.score;
